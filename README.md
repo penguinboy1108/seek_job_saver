@@ -40,14 +40,11 @@ Create a file named `.env` in the root directory with the following format:
 ```ini
 SEEK_URL=https://www.seek.co.nz/my-activity/applications
 DB_PATH=seek_jobs_demo.db
-```
-
-Optional for Chrome profile usage:
-
-```ini
 CHROME_PROFILE_PATH=C:\Users\{your username}\AppData\Local\Google\Chrome\User Data
 CHROME_PROFILE_DIR=Default
+CHROMEDRIVER=.\chromedriver.exe
 ```
+
 
 If using cookies manually, these aren't needed.
 
