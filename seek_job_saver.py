@@ -12,6 +12,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from dotenv import load_dotenv
+from dateutil.relativedelta import relativedelta
+from dateutil import parser as date_parser
+from datetime import datetime, timedelta
 
 # Load .env file
 load_dotenv()
@@ -166,12 +169,6 @@ for i in range(len(title_blocks)):
         print(f"[Skip] No 'View job' link for: {title_text} — {e}")
         continue
 
-    # Skip duplicates
-    cur.execute("SELECT 1 FROM jobs WHERE job_url = ?", (job_url,))
-    if cur.fetchone():
-        print(f"[Duplicate] Skipped {job_url}")
-        continue
-
     # Go to job detail page
     driver.get(job_url)
     try:
@@ -184,24 +181,81 @@ for i in range(len(title_blocks)):
     address = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-location']")
     field = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-classifications']")
     job_type = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-work-type']")
-    posted_date = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-date']")
     jd_text = safe_text(By.CSS_SELECTOR, "div[data-automation='jobAdDetails']")
 
-    # Save to DB
-    job_id = str(uuid.uuid4())
+    # --- Get Posted date (e.g., 'Posted 18d ago') ---
+    posted_date = ""
+    try:
+        posted_text = driver.find_element(By.XPATH, "//span[starts-with(text(), 'Posted ')]").text
+        m = re.search(r"Posted\s+(\d+)([dwmy])\s+ago", posted_text)
+        if m:
+            num = int(m.group(1))
+            unit = m.group(2)
+            today = datetime.today()
+            if unit == "d":
+                post_date = today - timedelta(days=num)
+            elif unit == "w":
+                post_date = today - timedelta(weeks=num)
+            elif unit == "m":
+                post_date = today - relativedelta(months=num)
+            elif unit == "y":
+                post_date = today - relativedelta(years=num)
+            posted_date = post_date.strftime("%Y-%m-%d")
+    except:
+        posted_date = ""
+
+    # --- Get Applied date (e.g., 'You applied on 29 Jul 2025') ---
+    applied_date_text = ""
+    try:
+        applied_text = driver.find_element(By.XPATH, "//span[starts-with(text(), 'You applied on')]").text
+        m = re.search(r"You applied on (.+)", applied_text)
+        if m:
+            dt = date_parser.parse(m.group(1))
+            applied_date_text = dt.strftime("%Y-%m-%d")
+            print(f"[Applied on SEEK] {applied_date_text}")
+    except:
+        pass
+
+    # Save to DB (insert new or update existing)
     now = datetime.utcnow().isoformat()
+    job_id = str(uuid.uuid4())
 
     try:
-        cur.execute("""
-            INSERT OR IGNORE INTO jobs
-            (id, job_url, job_title, company, address, field, job_type, posted_date, applied_date, jd, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (job_id, job_url, job_title, company, address, field, job_type,
-              posted_date, applied_date_text, jd_text, now))
+        # Check if job_url already exists
+        cur.execute("SELECT id FROM jobs WHERE job_url = ?", (job_url,))
+        row = cur.fetchone()
+
+        if row:
+            existing_id = row[0]
+            cur.execute("""
+                        UPDATE jobs
+                        SET job_title    = ?,
+                            company      = ?,
+                            address      = ?,
+                            field        = ?,
+                            job_type     = ?,
+                            posted_date  = ?,
+                            applied_date = ?,
+                            jd           = ?,
+                            created_at   = ?
+                        WHERE id = ?
+                        """, (job_title, company, address, field, job_type,
+                              posted_date, applied_date_text, jd_text, now, existing_id))
+            print(f"[Updated] {job_title} at {company}")
+        else:
+            cur.execute("""
+                        INSERT INTO jobs
+                        (id, job_url, job_title, company, address, field, job_type,
+                         posted_date, applied_date, jd, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (job_id, job_url, job_title, company, address, field, job_type,
+                              posted_date, applied_date_text, jd_text, now))
+            print(f"[Inserted] {job_title} at {company}")
+
         conn.commit()
-        print(f"[Saved] {job_title} at {company}")
+
     except Exception as e:
-        print(f"[DB Error] {e}")
+        print(f"[DB Error] {e} for {job_url}")
 
 # -----------------------------
 # Done
