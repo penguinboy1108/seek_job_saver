@@ -104,133 +104,108 @@ for _ in range(5):
     last_height = new_height
 
 # Collect clickable job-title anchors (each opens the right-side drawer)
+# -----------------------------
+# Find clickable job blocks
+# -----------------------------
 
-title_blocks = driver.find_elements(By.XPATH, "//span[@role='button' and .//span[text()='Job Title ']]")
-
+title_selector = "//span[@role='button' and .//span[text()='Job Title ']]"
+title_blocks = driver.find_elements(By.XPATH, title_selector)
 print(f"Found {len(title_blocks)} job entries.")
 
-for i, el in enumerate(title_blocks):
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+for i in range(len(title_blocks)):
+    # Re-grab job card list every time to avoid stale element
+    driver.get(APPLIED_URL)
+    wait.until(EC.presence_of_element_located((By.XPATH, title_selector)))
+    time.sleep(1)
+
+    title_blocks = driver.find_elements(By.XPATH, title_selector)
+    if i >= len(title_blocks):
+        break
+    el = title_blocks[i]
+
     title_text = el.text.replace("Job Title", "").strip()
     print(f"[{i + 1}] {title_text}")
 
     try:
-        el.click()
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", el)
     except Exception as e:
-        print(f"Click failed on {title_text}: {e}")
+        print(f"[Click failed] {title_text}: {e}")
         continue
 
-# # We'll iterate by index (re-find each time, because the DOM changes when the drawer opens)
-# for i in range(len(title_links)):
-#     # Re-find current card
-#     titles = driver.find_elements(By.CSS_SELECTOR, "a[data-automation='job-title']")
-#     if i >= len(titles):
-#         break
-#     title_el = titles[i]
-#     scroll_into_view(title_el)
-#     job_card_title_text = title_el.text.strip()
-#
-#     # Click the job card to open the right drawer (application details)
-#     wait_clickable((By.XPATH, f"(//a[@data-automation='job-title'])[{i+1}]")).click()
-#
-#     # Wait for the drawer to appear
-#     # The drawer content varies; we'll look for either a known container or the "View job" link.
-#     try:
-#         wait_present((By.XPATH, "//div[contains(@class,'DialogContent') or contains(@class,'drawer')]"))
-#     except:
-#         pass
-#
-#     # -----------------------------
-#     # Extract "Applied on SEEK" date from the drawer
-#     # -----------------------------
-#     applied_date_text = ""
-#     try:
-#         # Find the text node containing "Applied on SEEK" and read its nearby date.
-#         # We'll look for any element with that text, then read its following text.
-#         applied_label_el = wait_present((By.XPATH, "//*[contains(text(), 'Applied on SEEK')]"))
-#         # The date text often sits in the same container; get the whole container text and parse date.
-#         container = applied_label_el.find_element(By.XPATH, "./ancestor::*[self::div or self::section][1]")
-#         block_text = container.text
-#         # Look for a date like "29 Jul 2025" or similar
-#         m = re.search(r"\b(\d{1,2}\s+\w{3,}\s+\d{4})\b", block_text)
-#         if m:
-#             applied_date_text = m.group(1)
-#         else:
-#             # If not found, use the whole line after the label
-#             applied_date_text = block_text.replace("Applied on SEEK", "").strip()
-#     except Exception:
-#         applied_date_text = ""
-#
-#     # -----------------------------
-#     # Get the JD page link from "View job" (safer to extract href than to rely on new tab)
-#     # -----------------------------
-#     job_url = ""
-#     try:
-#         view_job_link = wait_clickable((By.XPATH, "//a[normalize-space()='View job']"))
-#         job_url = view_job_link.get_attribute("href") or ""
-#     except Exception:
-#         # Some cards might not have a view link (archived/removed). Skip them.
-#         print(f"[Skip] No 'View job' link for: {job_card_title_text}")
-#         # Close drawer if possible
-#         try:
-#             close_btn = driver.find_element(By.XPATH, "//button[@aria-label='Close' or @aria-label='Close dialog']")
-#             close_btn.click()
-#         except:
-#             pass
-#         continue
-#
-#     # If we've already saved this job_url before, skip (thanks to DB UNIQUE, but we also pre-check).
-#     cur.execute("SELECT 1 FROM jobs WHERE job_url = ?", (job_url,))
-#     if cur.fetchone():
-#         print(f"[Duplicate] {job_url} (skip)")
-#         # Close drawer
-#         try:
-#             close_btn = driver.find_element(By.XPATH, "//button[@aria-label='Close' or @aria-label='Close dialog']")
-#             close_btn.click()
-#         except:
-#             pass
-#         continue
-#
-#     # -----------------------------
-#     # 2) Open the JD page and scrape details
-#     # -----------------------------
-#     driver.get(job_url)
-#     try:
-#         wait_present((By.CSS_SELECTOR, "h1[data-automation='job-detail-title']"))
-#     except:
-#         print(f"[Warn] JD page didn't fully load: {job_url}")
-#
-#     job_title = safe_text(By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")
-#     company = safe_text(By.CSS_SELECTOR, "span[data-automation='advertiser-name']")
-#     address = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-location']")
-#     field = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-classifications']")
-#     job_type = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-work-type']")
-#     posted_date = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-date']")
-#     jd_text = safe_text(By.CSS_SELECTOR, "div[data-automation='jobAdDetails']")
-#
-#     # -----------------------------
-#     # 3) Save (UUID id, UNIQUE job_url avoids duplicates across runs)
-#     # -----------------------------
-#     now_iso = datetime.utcnow().isoformat()
-#     job_id = str(uuid.uuid4())
-#
-#     try:
-#         cur.execute("""
-#             INSERT OR IGNORE INTO jobs
-#             (id, job_url, job_title, company, address, field, job_type, posted_date, applied_date, jd, created_at)
-#             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-#         """, (job_id, job_url, job_title, company, address, field, job_type, posted_date, applied_date_text, jd_text, now_iso))
-#         conn.commit()
-#         if cur.rowcount == 0:
-#             print(f"[Duplicate] {job_url} (ignored by UNIQUE)")
-#         else:
-#             print(f"[Saved] {job_title} — {company}")
-#     except Exception as e:
-#         print(f"[DB Error] {e} for {job_url}")
-#
-# # -----------------------------
-# # Cleanup
-# # -----------------------------
-# driver.quit()
-# conn.close()
-# print("Done.")
+    # Wait for drawer content
+    try:
+        wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//a[contains(@href, 'job/') and contains(text(),'View job')]")))
+    except:
+        print(f"[Warning] Drawer not fully loaded for: {title_text}")
+        continue
+
+    # Get applied date
+    applied_date_text = ""
+    try:
+        applied_label_el = wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//*[contains(text(), 'Applied on SEEK')]")))
+        container = applied_label_el.find_element(By.XPATH, "./ancestor::*[self::div or self::section][1]")
+        block_text = container.text
+        m = re.search(r"\b(\d{1,2}\s+\w{3,}\s+\d{4})\b", block_text)
+        applied_date_text = m.group(1) if m else block_text.replace("Applied on SEEK", "").strip()
+        print(f"[Applied on SEEK] {applied_date_text}")
+    except:
+        pass
+
+    # Get View job link
+    try:
+        view_job_link = wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//a[contains(@href, 'job/') and contains(text(),'View job')]")))
+        job_href = view_job_link.get_attribute("href")
+        job_url = f"https://www.seek.co.nz{job_href}" if job_href.startswith("/") else job_href
+        print(f"[View job] {job_url}")
+    except Exception as e:
+        print(f"[Skip] No 'View job' link for: {title_text} — {e}")
+        continue
+
+    # Skip duplicates
+    cur.execute("SELECT 1 FROM jobs WHERE job_url = ?", (job_url,))
+    if cur.fetchone():
+        print(f"[Duplicate] Skipped {job_url}")
+        continue
+
+    # Go to job detail page
+    driver.get(job_url)
+    try:
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")))
+    except:
+        print(f"[Warn] JD page didn't load properly: {job_url}")
+
+    job_title = safe_text(By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")
+    company = safe_text(By.CSS_SELECTOR, "span[data-automation='advertiser-name']")
+    address = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-location']")
+    field = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-classifications']")
+    job_type = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-work-type']")
+    posted_date = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-date']")
+    jd_text = safe_text(By.CSS_SELECTOR, "div[data-automation='jobAdDetails']")
+
+    # Save to DB
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    try:
+        cur.execute("""
+            INSERT OR IGNORE INTO jobs
+            (id, job_url, job_title, company, address, field, job_type, posted_date, applied_date, jd, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (job_id, job_url, job_title, company, address, field, job_type,
+              posted_date, applied_date_text, jd_text, now))
+        conn.commit()
+        print(f"[Saved] {job_title} at {company}")
+    except Exception as e:
+        print(f"[DB Error] {e}")
+
+# -----------------------------
+# Done
+# -----------------------------
+driver.quit()
+conn.close()
+print("All done.")
