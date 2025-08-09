@@ -13,7 +13,7 @@ It supports:
 
 ### 1. Clone this repository
 ```bash
-git clone [https://github.com/your-username/seek-job-scraper](https://github.com/penguinboy1108/seek_job_saver).git
+git clone https://github.com/penguinboy1108/seek_job_saver.git
 ```
 
 ---
