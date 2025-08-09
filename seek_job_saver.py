@@ -87,175 +87,215 @@ def safe_text(by, selector):
         return driver.find_element(by, selector).text.strip()
     except:
         return ""
-
 # -----------------------------
 # 1) Open applied list
 # -----------------------------
+# -----------------------------
+# 1) Open applied list (page 1)
+# -----------------------------
 driver.get(APPLIED_URL)
-# If you are not logged in, this will redirect to sign-in. Since we reuse your profile,
-# you should land directly on the applied jobs page.
 wait_present((By.CSS_SELECTOR, "#tabs-saved-applied_2_panel > div:nth-child(2)"))
+time.sleep(1)
 
-# Some lists lazy-load by scrolling; we'll collect titles after a gentle scroll.
-last_height = 0
-for _ in range(5):
-    driver.execute_script("window.scrollBy(0, 1200);")
-    time.sleep(0.8)
-    new_height = driver.execute_script("return document.body.scrollHeight;")
-    if new_height == last_height:
-        break
-    last_height = new_height
+def lazy_scroll():
+    """Scroll a bit to trigger lazy load on the list."""
+    last_height = 0
+    for _ in range(5):
+        driver.execute_script("window.scrollBy(0, 1200);")
+        time.sleep(0.8)
+        new_height = driver.execute_script("return document.body.scrollHeight;")
+        if new_height == last_height:
+            break
+        last_height = new_height
 
-# Collect clickable job-title anchors (each opens the right-side drawer)
+def find_title_blocks():
+    """Return clickable job blocks on the current page."""
+    title_xpath = "//span[@role='button' and .//span[text()='Job Title ']]"
+    return driver.find_elements(By.XPATH, title_xpath)
+
+def close_drawer_if_open():
+    """Best-effort close of the right-side drawer."""
+    try:
+        close_btn = driver.find_element(By.XPATH, "//button[@aria-label='Close' or @aria-label='Close dialog']")
+        driver.execute_script("arguments[0].click();", close_btn)
+        time.sleep(0.3)
+    except Exception:
+        # Fallback: press ESC
+        try:
+            from selenium.webdriver.common.keys import Keys
+            driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+def next_page():
+    """
+    Click 'Next' to go to the next page.
+    Returns True if page changed, False if already last page / cannot click.
+    """
+    try:
+        # Snapshot first card text to detect change after clicking next
+        before = ""
+        blocks = find_title_blocks()
+        if blocks:
+            before = blocks[0].text
+
+        # 'Next' button is two nested spans; click parent span
+        next_btn = driver.find_element(By.XPATH, "//span[.='Next']/parent::span")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", next_btn)
+        time.sleep(0.2)
+        driver.execute_script("arguments[0].click();", next_btn)
+    except Exception:
+        return False
+
+    # Wait for list to change (simple heuristic)
+    try:
+        WebDriverWait(driver, 8).until(
+            lambda d: (find_title_blocks() and find_title_blocks()[0].text != before)
+        )
+        return True
+    except Exception:
+        return False
+
 # -----------------------------
-# Find clickable job blocks
+# Process all pages
 # -----------------------------
+page_idx = 1
+while True:
+    lazy_scroll()
 
-title_selector = "//span[@role='button' and .//span[text()='Job Title ']]"
-title_blocks = driver.find_elements(By.XPATH, title_selector)
-print(f"Found {len(title_blocks)} job entries.")
+    title_blocks = find_title_blocks()
+    print(f"[Page {page_idx}] Found {len(title_blocks)} job entries.")
 
-for i in range(len(title_blocks)):
-    # Re-grab job card list every time to avoid stale element
-    driver.get(APPLIED_URL)
-    wait.until(EC.presence_of_element_located((By.XPATH, title_selector)))
-    time.sleep(1)
+    # Iterate within the current page
+    for i in range(len(title_blocks)):
+        # Re-find on each iteration to avoid stale after drawer updates
+        title_blocks = find_title_blocks()
+        if i >= len(title_blocks):
+            break
 
-    title_blocks = driver.find_elements(By.XPATH, title_selector)
-    if i >= len(title_blocks):
-        break
-    el = title_blocks[i]
+        el = title_blocks[i]
+        title_text = el.text.replace("Job Title", "").strip()
+        print(f"[{i + 1}] {title_text}")
 
-    title_text = el.text.replace("Job Title", "").strip()
-    print(f"[{i + 1}] {title_text}")
+        # Open drawer for this job
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(0.4)
+            driver.execute_script("arguments[0].click();", el)
+        except Exception as e:
+            print(f"[Click failed] {title_text}: {e}")
+            continue
 
-    try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        time.sleep(0.5)
-        driver.execute_script("arguments[0].click();", el)
-    except Exception as e:
-        print(f"[Click failed] {title_text}: {e}")
-        continue
+        # Wait for 'View job'
+        try:
+            view_job_link = wait.until(EC.presence_of_element_located(
+                (By.XPATH, "//a[contains(@href, 'job/') and contains(text(),'View job')]")))
+            job_href = view_job_link.get_attribute("href")
+            job_url = f"https://www.seek.co.nz{job_href}" if job_href.startswith("/") else job_href
+        except Exception as e:
+            print(f"[Skip] No 'View job' link for: {title_text} — {e}")
+            close_drawer_if_open()
+            continue
 
-    # Wait for drawer content
-    try:
-        wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//a[contains(@href, 'job/') and contains(text(),'View job')]")))
-    except:
-        print(f"[Warning] Drawer not fully loaded for: {title_text}")
-        continue
-
-    # Get applied date
-    applied_date_text = ""
-    try:
-        applied_label_el = wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//*[contains(text(), 'Applied on SEEK')]")))
-        container = applied_label_el.find_element(By.XPATH, "./ancestor::*[self::div or self::section][1]")
-        block_text = container.text
-        m = re.search(r"\b(\d{1,2}\s+\w{3,}\s+\d{4})\b", block_text)
-        applied_date_text = m.group(1) if m else block_text.replace("Applied on SEEK", "").strip()
-        print(f"[Applied on SEEK] {applied_date_text}")
-    except:
-        pass
-
-    # Get View job link
-    try:
-        view_job_link = wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//a[contains(@href, 'job/') and contains(text(),'View job')]")))
-        job_href = view_job_link.get_attribute("href")
-        job_url = f"https://www.seek.co.nz{job_href}" if job_href.startswith("/") else job_href
         print(f"[View job] {job_url}")
-    except Exception as e:
-        print(f"[Skip] No 'View job' link for: {title_text} — {e}")
-        continue
 
-    # Go to job detail page
-    driver.get(job_url)
-    try:
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")))
-    except:
-        print(f"[Warn] JD page didn't load properly: {job_url}")
+        # ---- Open JD in a NEW TAB to keep the current page state
+        main_handle = driver.current_window_handle
+        driver.execute_script("window.open(arguments[0], '_blank');", job_url)
+        driver.switch_to.window(driver.window_handles[-1])
 
-    job_title = safe_text(By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")
-    company = safe_text(By.CSS_SELECTOR, "span[data-automation='advertiser-name']")
-    address = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-location']")
-    field = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-classifications']")
-    job_type = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-work-type']")
-    jd_text = safe_text(By.CSS_SELECTOR, "div[data-automation='jobAdDetails']")
+        # ---- Scrape JD page
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")))
+        except:
+            print(f"[Warn] JD page didn't load properly: {job_url}")
 
-    # --- Get Posted date (e.g., 'Posted 18d ago') ---
-    posted_date = ""
-    try:
-        posted_text = driver.find_element(By.XPATH, "//span[starts-with(text(), 'Posted ')]").text
-        m = re.search(r"Posted\s+(\d+)([dwmy])\s+ago", posted_text)
-        if m:
-            num = int(m.group(1))
-            unit = m.group(2)
-            today = datetime.today()
-            if unit == "d":
-                post_date = today - timedelta(days=num)
-            elif unit == "w":
-                post_date = today - timedelta(weeks=num)
-            elif unit == "m":
-                post_date = today - relativedelta(months=num)
-            elif unit == "y":
-                post_date = today - relativedelta(years=num)
-            posted_date = post_date.strftime("%Y-%m-%d")
-    except:
+        job_title  = safe_text(By.CSS_SELECTOR, "h1[data-automation='job-detail-title']")
+        company    = safe_text(By.CSS_SELECTOR, "span[data-automation='advertiser-name']")
+        address    = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-location']")
+        field      = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-classifications']")
+        job_type   = safe_text(By.CSS_SELECTOR, "span[data-automation='job-detail-work-type']")
+        jd_text    = safe_text(By.CSS_SELECTOR, "div[data-automation='jobAdDetails']")
+
+        # Posted … ago -> absolute date
         posted_date = ""
+        try:
+            posted_text = driver.find_element(By.XPATH, "//span[starts-with(text(), 'Posted ')]").text
+            m = re.search(r"Posted\s+(\d+)([dwmy])\s+ago", posted_text)
+            if m:
+                num = int(m.group(1)); unit = m.group(2)
+                today = datetime.today()
+                if unit == "d":
+                    post_date = today - timedelta(days=num)
+                elif unit == "w":
+                    post_date = today - timedelta(weeks=num)
+                elif unit == "m":
+                    post_date = today - relativedelta(months=num)
+                elif unit == "y":
+                    post_date = today - relativedelta(years=num)
+                posted_date = post_date.strftime("%Y-%m-%d")
+        except Exception:
+            posted_date = ""
 
-    # --- Get Applied date (e.g., 'You applied on 29 Jul 2025') ---
-    applied_date_text = ""
-    try:
-        applied_text = driver.find_element(By.XPATH, "//span[starts-with(text(), 'You applied on')]").text
-        m = re.search(r"You applied on (.+)", applied_text)
-        if m:
-            dt = date_parser.parse(m.group(1))
-            applied_date_text = dt.strftime("%Y-%m-%d")
-            print(f"[Applied on SEEK] {applied_date_text}")
-    except:
-        pass
+        # You applied on …
+        applied_date_text = ""
+        try:
+            applied_text = driver.find_element(By.XPATH, "//span[starts-with(text(), 'You applied on')]").text
+            m = re.search(r"You applied on (.+)", applied_text)
+            if m:
+                dt = date_parser.parse(m.group(1))
+                applied_date_text = dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
 
-    # Save to DB (insert new or update existing)
-    now = datetime.utcnow().isoformat()
-    job_id = str(uuid.uuid4())
+        # ---- Upsert to DB
+        now = datetime.utcnow().isoformat()
+        job_id = str(uuid.uuid4())
 
-    try:
-        # Check if job_url already exists
-        cur.execute("SELECT id FROM jobs WHERE job_url = ?", (job_url,))
-        row = cur.fetchone()
+        try:
+            cur.execute("SELECT id FROM jobs WHERE job_url = ?", (job_url,))
+            row = cur.fetchone()
+            if row:
+                existing_id = row[0]
+                cur.execute("""
+                    UPDATE jobs
+                    SET job_title=?, company=?, address=?, field=?, job_type=?,
+                        posted_date=?, applied_date=?, jd=?, created_at=?
+                    WHERE id=?
+                """, (job_title, company, address, field, job_type,
+                      posted_date, applied_date_text, jd_text, now, existing_id))
+                print(f"[Updated] {job_title} — {company}")
+            else:
+                cur.execute("""
+                    INSERT INTO jobs
+                    (id, job_url, job_title, company, address, field, job_type,
+                     posted_date, applied_date, jd, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (job_id, job_url, job_title, company, address, field, job_type,
+                      posted_date, applied_date_text, jd_text, now))
+                print(f"[Inserted] {job_title} — {company}")
+            conn.commit()
+        except Exception as e:
+            print(f"[DB Error] {e} for {job_url}")
 
-        if row:
-            existing_id = row[0]
-            cur.execute("""
-                        UPDATE jobs
-                        SET job_title    = ?,
-                            company      = ?,
-                            address      = ?,
-                            field        = ?,
-                            job_type     = ?,
-                            posted_date  = ?,
-                            applied_date = ?,
-                            jd           = ?,
-                            created_at   = ?
-                        WHERE id = ?
-                        """, (job_title, company, address, field, job_type,
-                              posted_date, applied_date_text, jd_text, now, existing_id))
-            print(f"[Updated] {job_title} at {company}")
-        else:
-            cur.execute("""
-                        INSERT INTO jobs
-                        (id, job_url, job_title, company, address, field, job_type,
-                         posted_date, applied_date, jd, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (job_id, job_url, job_title, company, address, field, job_type,
-                              posted_date, applied_date_text, jd_text, now))
-            print(f"[Inserted] {job_title} at {company}")
+        # ---- Close JD tab and return to the list page
+        driver.close()
+        driver.switch_to.window(main_handle)
+        close_drawer_if_open()
+        time.sleep(0.2)
 
-        conn.commit()
-
-    except Exception as e:
-        print(f"[DB Error] {e} for {job_url}")
+    # -----------------------------
+    # Try go to next page
+    # -----------------------------
+    if next_page():
+        page_idx += 1
+        wait_present((By.CSS_SELECTOR, "#tabs-saved-applied_2_panel > div:nth-child(2)"))
+        time.sleep(0.8)
+        continue
+    else:
+        print("[Done] No more pages.")
+        break
 
 # -----------------------------
 # Done
