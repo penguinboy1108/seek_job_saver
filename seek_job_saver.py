@@ -23,7 +23,7 @@ load_dotenv()
 # -----------------------------
 # Put your local paths in environment variables (or a .env you don't commit).
 CHROME_BINARY = os.getenv("CHROME_BINARY", "")  # optional
-CHROME_DRIVER_PATH = os.getenv("CHROMEDRIVER", "chromedriver")
+CHROME_DRIVER_PATH = os.getenv("CHROMEDRIVER") + "\chromedriver.exe"
 CHROME_USER_DATA_DIR = os.getenv("CHROME_USER_DATA_DIR")
 CHROME_PROFILE_DIR = os.getenv("CHROME_PROFILE_DIR", "Default")
 DB_PATH = os.getenv("DB_PATH", "seek_jobs_demo.db")
